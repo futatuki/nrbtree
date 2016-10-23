@@ -1,0 +1,19 @@
+# $yfId: readindex/branches/on_the_way/btree/pybtree.pxd.in 56 2016-10-18 15:09:55Z futatuki $
+from cwrapper.cobj cimport *
+from btree cimport *
+DEF DEBUG = @DEBUG@
+IF DEBUG:
+    from btree_debug cimport *
+
+cdef int _pyobj_cmp_func(BT_KEY_T k1, BT_KEY_T k2)
+
+cdef class Btree(object):
+    cdef bt_btree_t * _c_btree
+    cdef dict ref
+    cdef object __weakref__
+
+cdef class Bt_node_data_ref(CObjPtr):
+    cdef object _check_consistency
+
+cdef class Bt_node_ref(CObjPtr):
+    cdef object _check_consistency

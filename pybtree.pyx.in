@@ -1,0 +1,396 @@
+# $yfId: readindex/branches/on_the_way/btree/pybtree.pyx.in 56 2016-10-18 15:09:55Z futatuki $
+DEF DEBUG = @DEBUG@
+from libc.stdint cimport uint64_t, uint32_t
+from cpython.ref cimport Py_INCREF, Py_DECREF, Py_XINCREF, Py_XDECREF
+from cwrapper.cobj import enumgen
+
+class BtError(Exception): pass
+class BtTreeIsNull(BtError): pass
+class BtDuplicatedKey(BtError): pass
+class BtKeyNotFound(BtError): pass
+
+class Unbound(Exception):
+    def __init__(self, mes='C pointer unbound'):
+        self.mes = mes
+    def __str__(self):
+        return self.mes
+class InvalidPointer(Exception):
+    def __init__(self, val=None):
+        if val is None:
+            mes='invalid C pointer value'
+        elif isinstance(val, str):
+            self.mes = val
+        else:
+            self.mes = 'invalid C pointer value: 0x%x' % int(val)
+    def __str__(self):
+        return self.mes
+class InconsistentValue(Exception):
+    def __init__(self, mes=
+            'member value inconsistent between Python object and C struct'):
+        self.mes = mes
+    def __str__(self):
+        return self.mes
+
+Bt_node_type = enumgen('Bt_node_type',
+        {   'bt_node_only_root' : bt_node_only_root,
+            'bt_node_root'      : bt_node_root,
+            'bt_node_internal'  : bt_node_internal,
+            'bt_node_leaf'      : bt_node_leaf,
+            'bt_node_unknown'   : bt_node_unknown},
+        bt_node_unknown)
+
+cdef object BtSetException(bt_error_t err):
+    return {
+        bt_success           : None,
+        bt_tree_is_null      : BtTreeIsNull,
+        bt_duplicated_key    : BtDuplicatedKey,
+        bt_not_enough_memory : MemoryError,
+        bt_key_not_found     : BtKeyNotFound }[err]
+
+
+cdef class Bt_node_data_ref(CObjPtr):
+    def __cinit__(self, vals=None, nelms=0, is_const=True, **m):
+        self._c_base_type = 'bt_node_data_t'
+        self._c_esize = sizeof(bt_node_data_t)
+        self._mddict = {
+            'm_key'     : 0,
+            'm_node'    : None,
+            'm_prev'    : None,
+            'm_val'     : 0,
+            'm_r_child' : None
+        }
+        if m.has_key('check_consitency') and m['check_consistency']:
+            self._check_consistency = True
+        else:
+            self._check_consistency = False
+    def __init__(self, vals=None, nelms=0, is_const=True, **m):
+        raise Exception(
+            "Bt_node_data_ref should not be built from Python code")
+    def set_check_consistency(self, flag):
+        self._check_consistency = True if flag else False
+    property m_key:
+        def __get__(self):
+            cdef uint64_t pval
+            cdef object key
+            cdef dict mdict
+            if self._c_ptr is NULL:
+                pval = <uint64_t>(self._c_ptr)
+                raise Unbound(
+                    'C pointer bt_node_data_t * unbound : 0x%x' % pval)
+            key = <object>((<bt_node_data_t *>(self._c_ptr)).key)
+            mdict = self._py_vals[self._nth]
+            if self._check_consistency:
+                if mdict.has_key('m_key') and mdict['m_key'] != key:
+                    raise InconsistentValue(
+                            "Inconsistent value in member 'key' of "
+                            "Bt_node_data_ref class :\n"
+                            "C value = %d, Python class value = %d"
+                            % key, mdict['m_key'] )
+            mdict['m_key'] = key
+            return key
+    property m_node:
+        def __get__(self):
+            cdef uint64_t pval
+            cdef bt_node_t * _c_node
+            cdef Bt_node_ref ref
+            cdef dict mdict
+
+            if self._c_ptr is NULL:
+                pval = <uint64_t>(self._c_ptr)
+                raise Unbound(
+                    'C pointer bt_node_data_t * unbound : 0x%x' % pval)
+            mdict = self._py_vals[self._nth]
+            _c_node = (<bt_node_data_t *>(self._c_ptr)).node
+            if _c_node is NULL:
+                if self._check_consistency:
+                    if mdict.has_key('m_node') and mdict['m_node'] is not None:
+                        raise InconsistentValue(
+                                "Inconsistent value in member 'node' of "
+                                "Bt_node_data_ref class:\n"
+                                "(C value is NULL and Python is not None)")
+                else:
+                    mdict['m_node'] = None
+                return None
+            else:
+                if mdict.has_key('m_node') and mdict['m_node']:
+                    ref = mdict['m_node']
+                    if ref._c_ptr == <void *>_c_node:
+                        return ref
+                    elif self._check_consistency:
+                        raise InconsistentValue(
+                                "Inconsistent value in member 'node' of "
+                                "Bt_node_data_ref class")
+                ref = Bt_node_ref.__new__(
+                            Bt_node_ref, vals=None, nelms=0, is_const=True)
+                ref.bind(<void *>_c_node, 1, 0, None, [{}])
+                mdict['m_node'] = ref
+                return ref
+    property m_prev:
+        def __get__(self):
+            cdef uint64_t pval
+            cdef bt_node_data_t * _c_ref
+            cdef Bt_node_data_ref ref
+            cdef dict mdict
+            IF DEBUG:
+                cdef bt_node_t * _c_node
+
+            if self._c_ptr is NULL:
+                pval = <uint64_t>(self._c_ptr)
+                raise Unbound(
+                    'C pointer bt_node_data_t * unbound : 0x%x' % pval)
+            mdict = self._py_vals[self._nth]
+            _c_ref = (<bt_node_data_t *>(self._c_ptr)).prev
+            if _c_ref is NULL:
+                if self._check_consistency:
+                    if mdict.has_key('m_prev') and mdict['m_prev'] is not None:
+                        raise InconsistentValue(
+                                'Inconsistent value in member "prev" of '
+                                'Bt_node_data_ref class:\n'
+                                '(C value is NULL and Python is not None)')
+                else:
+                    mdict['m_prev'] = None
+                return None
+            else:
+                if mdict.has_key('m_prev') and mdict['m_prev']:
+                    ref = mdict['m_prev']
+                    if ref._c_ptr == <void *>_c_ref:
+                        return ref
+                    elif self._check_consistency:
+                        raise InconsistentValue(
+                                "Inconsistent value in member 'prev' of "
+                                "Bt_node_data_ref class")
+                ref = Bt_node_data_ref.__new__(Bt_node_data_ref,
+                            vals=None, nelms=0, is_const=True)
+                ref.bind(<void *>_c_ref, 1, 0, None, [{}])
+                mdict['m_prev'] = ref
+                return ref
+    property m_next:
+        def __get__(self):
+            cdef uint64_t pval
+            cdef bt_node_data_t * _c_ref
+            cdef Bt_node_data_ref ref
+            cdef dict mdict
+            IF DEBUG:
+                cdef bt_node_t * _c_node
+
+            if self._c_ptr is NULL:
+                pval = <uint64_t>(self._c_ptr)
+                raise Unbound(
+                    'C pointer bt_node_data_t * unbound : 0x%x' % pval)
+            mdict = self._py_vals[self._nth]
+            _c_ref = (<bt_node_data_t *>(self._c_ptr)).next
+            if _c_ref is NULL:
+                if self._check_consistency:
+                    if mdict.has_key('m_next') and mdict['m_next'] is not None:
+                        raise InconsistentValue(
+                                'Inconsistent value in member "next" of '
+                                'Bt_node_data_ref class:\n'
+                                '(C value is NULL and Python is not None)')
+                else:
+                    mdict['m_next'] = None
+                return None
+            else:
+                if mdict.has_key('m_next') and mdict['m_next']:
+                    ref = mdict['m_next']
+                    if ref._c_ptr == <void *>_c_ref:
+                        return ref
+                    elif self._check_consistency:
+                        raise InconsistentValue(
+                                "Inconsistent value in member 'next' of "
+                                "Bt_node_data_ref class")
+                ref = Bt_node_data_ref.__new__(Bt_node_data_ref,
+                            vals=None, nelms=0, is_const=True)
+                ref.bind(<void *>_c_ref, 1, 0, None, [{}])
+                mdict['m_next'] = ref
+                return ref
+    property m_r_child:
+        def __get__(self):
+            cdef uint64_t pval
+            cdef bt_node_t * _c_r_child
+            cdef Bt_node_ref ref
+            cdef dict mdict
+
+            if self._c_ptr is NULL:
+                pval = <uint64_t>(self._c_ptr)
+                raise Unbound(
+                    'C pointer bt_node_data_t * unbound : 0x%x' % pval)
+            mdict = self._py_vals[self._nth]
+            _c_r_child = (<bt_node_data_t *>(self._c_ptr)).e.r_child
+            if _c_r_child is NULL:
+                if self._check_consistency:
+                    if (    mdict.has_key('m_r_child')
+                        and mdict['m_r_child'] is not None):
+                        raise InconsistentValue(
+                                "Inconsistent value in member 'e.r_child' of "
+                                "Bt_node_data_ref class:\n"
+                                "(C value is NULL and Python is not None)")
+                else:
+                    mdict['m_r_child'] = None
+                return None
+            else:
+                if mdict.has_key('m_r_child') and mdict['m_r_child']:
+                    ref = mdict['m_r_child']
+                    if ref._c_ptr == <void *>_c_r_child:
+                        return ref
+                    elif self._check_consistency:
+                        raise InconsistentValue(
+                                "Inconsistent value in member 'e.r_child' of "
+                                "Bt_node_data_ref class")
+                ref = Bt_node_ref.__new__(Bt_node_ref,
+                            vals=None, nelms=0, is_const=True)
+                ref.bind(<void *>_c_r_child, 1, 0, None, [{}])
+                mdict['m_r_child'] = ref
+                return ref
+
+cdef class Bt_node_ref(CObjPtr):
+    def __cinit__(self, vals=None, nelms=0, is_const=True, **m):
+        self._c_base_type = 'bt_node_t'
+        self._c_esize = sizeof(bt_node_t)
+        self._mddict = {
+            'm_node_type'     : bt_node_unknown,
+            'm_n_indexes'     : 0,
+            'm_index_top'     : None,
+            'm_parent'        : None,
+        }
+        if m.has_key('check_consitency') and m['check_consistency']:
+            self._check_consistency = True
+        else:
+            self._check_consistency = False
+    def __init__(self, vals=None, nelms=0, is_const=True, **m):
+        raise Exception(
+            "Bt_node_data_ref should not be built from Python code")
+    def set_check_consistency(self, flag):
+        self._check_consistency = True if flag else False
+    property m_node_type:
+        def __get__(self):
+            cdef uint64_t pval
+            cdef bt_node_type_t _c_node_type
+            cdef object node_type
+            cdef dict mdict
+            if self._c_ptr is NULL:
+                pval = <uint64_t>(self._c_ptr)
+                raise Unbound(
+                    'C pointer bt_node_t * unbound : 0x%x' % pval)
+            _c_node_type = (<bt_node_t *>(self._c_ptr)).node_type
+            node_type = Bt_node_type(_c_node_type)
+            mdict = self._py_vals[self._nth]
+            if self._check_consistency:
+                if (    mdict.has_key('m_node_type')
+                    and (mdict['m_node_type'] != node_type)):
+                    raise InconsistentValue(
+                            "Inconsistent value in member 'node_type' of "
+                            "Bt_node_ref class :\n"
+                            "C value = %s, Python class value = %s"
+                            % node_type, mdict['m_node_type'] )
+            mdict['m_node_type'] = node_type
+            return node_type
+    property m_n_indexes:
+        def __get__(self):
+            cdef uint64_t pval
+            cdef int n_indexes
+            cdef dict mdict
+            if self._c_ptr is NULL:
+                pval = <uint64_t>(self._c_ptr)
+                raise Unbound(
+                    'C pointer bt_node_data_t * unbound : 0x%x' % pval)
+            n_indexes = (<bt_node_t *>(self._c_ptr)).n_indexes
+            mdict = self._py_vals[self._nth]
+            if self._check_consistency:
+                if (    mdict.has_key('m_n_indexes')
+                    and (mdict['m_n_indexes'] != n_indexes)):
+                    raise InconsistentValue(
+                            "Inconsistent value in member 'n_indexes' of "
+                            "Bt_node_data_ref class :\n"
+                            "C value = %d, Python class value = %d"
+                            % n_indexes, mdict['m_n_indexes'] )
+            mdict['m_n_indexes'] = n_indexes
+            return n_indexes
+    property m_index_top:
+        def __get__(self):
+            cdef uint64_t pval
+            cdef Bt_node_data_ref ref
+
+            if self._c_ptr is NULL:
+                pval = <uint64_t>(self._c_ptr)
+                raise Unbound(
+                    'C pointer bt_node_data_t * unbound : 0x%x' % pval)
+            mdict = self._py_vals[self._nth]
+            if not mdict.has_key('m_index_top'):
+                ref = Bt_node_data_ref.__new__(Bt_node_data_ref,
+                            vals=None, nelms=0, is_const=True)
+                ref.bind(<void *>&((<bt_node_t*>(self._c_ptr)).index_top),
+                            1, 0, None, [{}])
+                mdict['m_index_top'] = ref
+            return mdict['m_index_top']
+
+cdef int _pyobj_cmp_func(BT_KEY_T k1, BT_KEY_T k2):
+     cdef object p_k1, p_k2
+     p_k1 = <object>k1
+     p_k2 = <object>k2
+     return 0 if p_k1 == p_k2 else -1 if p_k1 < p_k2 else 1 
+
+cdef void _py_incref(object o):
+    Py_INCREF(o);
+    return;
+
+cdef void _py_decref(object o):
+    Py_DECREF(o);
+    return;
+
+
+cdef class Btree(object):
+    def __cinit__(self):
+        self._c_btree = bt_new_btree(_pyobj_cmp_func,
+                            <key_func_t>_py_incref, <key_func_t>_py_decref,
+                            <val_func_t>_py_incref, <val_func_t>_py_decref)
+        if self._c_btree is NULL:
+            raise MemoryError
+        return
+
+    def __dealloc__(self):
+        if self._c_btree is not NULL:
+            bt_del_btree(self._c_btree)
+        return
+
+    def insert(self, key, val):
+        cdef bt_error_t err
+
+        if self._c_btree is NULL:
+            raise BtTreeIsNull()
+        err = bt_insert(self._c_btree, <BT_KEY_T>key, <BT_VAL_T>val)
+        if err != bt_success:
+            raise BtSetException(err)()
+        return
+
+    def search(self, key):
+        cdef bt_error_t err
+        cdef BT_VAL_T val
+
+        if self._c_btree is NULL:
+            raise BtTreeIsNull()
+        err = bt_search_data(self._c_btree, <BT_KEY_T>key, &val)
+        if   err == bt_key_not_found:
+            return None
+        elif err != bt_success:
+            raise BtSetException(err)()
+        return <object>val
+
+    def update(self, key, val):
+        cdef bt_error_t err
+
+        if self._c_btree is NULL:
+            raise BtTreeIsNull()
+        err = bt_update_data(self._c_btree, <BT_KEY_T>key, <BT_VAL_T>val)
+        if err != bt_success:
+            raise BtSetException(err)()
+        return
+
+    def get_root_node(self):
+        cdef Bt_node_ref ref
+        if self._c_btree is NULL:
+            raise BtTreeIsNull()
+        ref = Bt_node_ref.__new__(Bt_node_ref,
+                            vals=None, nelms=0, is_const=True)
+        ref.bind(<void *>((self._c_btree[0]).root), 1, 0, None, [{}])
+        return ref
+
