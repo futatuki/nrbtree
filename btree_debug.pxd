@@ -1,4 +1,4 @@
-# $yfId: readindex/branches/on_the_way/btree/btree_debug.pxd 40 2016-10-15 06:46:26Z futatuki $
+# $yfId: btree/trunk/btree_debug.pxd 40 2016-10-15 06:46:26Z futatuki $
 cimport btree
 
 cdef extern from "btree.h" nogil:

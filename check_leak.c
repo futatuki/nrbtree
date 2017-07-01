@@ -1,4 +1,4 @@
-/* $yfId: readindex/branches/on_the_way/btree/check_leak.c 56 2016-10-18 15:09:55Z futatuki $ */
+/* $yfId: btree/trunk/check_leak.c 73 2017-01-14 10:59:32Z futatuki $ */
 # include <stdio.h>
 # include <stdlib.h>
 # include <stdint.h>
@@ -9,8 +9,8 @@ main(void)
 {
     int c;
     plist_t * plist, * tp, * tp2;
-    uint32_t k;
-    uint32_t v;
+    uint64_t k;
+    uint64_t v;
     bt_btree_t *t;
     bt_error_t err;
  
@@ -24,7 +24,7 @@ main(void)
     while(c < 10000) {
         /* k = random(), v = random(); */
         k = arc4random(), v = arc4random();
-        err = bt_insert(t, (BT_KEY_T)k, (BT_VAL_T)v);
+        err = bt_insert(t, (BT_KEY_T)k, (BT_VAL_T)v, 0);
         if (err == bt_duplicated_key) continue;
         if (err) {
             fprintf(stderr, "an error occur while running test\n");

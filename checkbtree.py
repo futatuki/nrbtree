@@ -1,11 +1,11 @@
 #!/usr/local/bin/python2.7
 
 import random
-import pybtree
+import Btree
 
 def random_check_btree(stop=False):
     test_pat  = []
-    test_tree = pybtree.Btree()
+    test_tree = Btree.Btree()
     results   = []
 
     c = 0
@@ -17,7 +17,7 @@ def random_check_btree(stop=False):
         test_pat.append((k,v))
         try:
             test_tree.insert(k,v)
-        except pybtree.BtDuplicatedKey:
+        except Btree.BtDuplicatedKey:
             pass
         # verify
         for tk,tv in test_pat:

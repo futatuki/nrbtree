@@ -1,13 +1,13 @@
-# $yfId: readindex/branches/on_the_way/btree/pybtree.pyx.in 56 2016-10-18 15:09:55Z futatuki $
-DEF DEBUG = @DEBUG@
+# $yfId: btree/trunk/Btree.pyx.in 81 2017-07-01 19:35:19Z futatuki $
 from libc.stdint cimport uint64_t, uint32_t
 from cpython.ref cimport Py_INCREF, Py_DECREF, Py_XINCREF, Py_XDECREF
-from cwrapper.cobj import enumgen
+from cwrapper.cobj import gen_enum
 
 class BtError(Exception): pass
 class BtTreeIsNull(BtError): pass
 class BtDuplicatedKey(BtError): pass
 class BtKeyNotFound(BtError): pass
+class BtCellUnused(BtError): pass
 
 class Unbound(Exception):
     def __init__(self, mes='C pointer unbound'):
@@ -31,7 +31,7 @@ class InconsistentValue(Exception):
     def __str__(self):
         return self.mes
 
-Bt_node_type = enumgen('Bt_node_type',
+Bt_node_type = gen_enum('Bt_node_type',
         {   'bt_node_only_root' : bt_node_only_root,
             'bt_node_root'      : bt_node_root,
             'bt_node_internal'  : bt_node_internal,
@@ -39,13 +39,21 @@ Bt_node_type = enumgen('Bt_node_type',
             'bt_node_unknown'   : bt_node_unknown},
         bt_node_unknown)
 
+Bt_cell_state = gen_enum('Bt_cell_state',
+        {   'bt_cell_status_unused'       : bt_cell_status_unused,
+            'bt_cell_status_value_used'   : bt_cell_status_value_used,
+            'bt_cell_status_part_of_node' : bt_cell_status_part_of_node,
+            'bt_cell_status_branch_used'  : bt_cell_status_branch_used},
+            'bt_cell_status_unused')
+
 cdef object BtSetException(bt_error_t err):
     return {
-        bt_success           : None,
-        bt_tree_is_null      : BtTreeIsNull,
-        bt_duplicated_key    : BtDuplicatedKey,
-        bt_not_enough_memory : MemoryError,
-        bt_key_not_found     : BtKeyNotFound }[err]
+        bt_success            : None,
+        bt_tree_is_null       : BtTreeIsNull,
+        bt_duplicated_key     : BtDuplicatedKey,
+        bt_not_enough_memory  : MemoryError,
+        bt_key_not_found      : BtKeyNotFound,
+        bt_key_cell_is_unused : BtCellUnused }[err]
 
 
 cdef class Bt_node_data_ref(CObjPtr):
@@ -56,8 +64,13 @@ cdef class Bt_node_data_ref(CObjPtr):
             'm_key'     : 0,
             'm_node'    : None,
             'm_prev'    : None,
+            'm_status'  : 0,
             'm_val'     : 0,
             'm_r_child' : None
+        }
+        self._madict = {
+            'm_val'     : 'm_r_child',
+            'm_r_child' : 'm_val'
         }
         if m.has_key('check_consitency') and m['check_consistency']:
             self._check_consistency = True
@@ -77,8 +90,12 @@ cdef class Bt_node_data_ref(CObjPtr):
                 pval = <uint64_t>(self._c_ptr)
                 raise Unbound(
                     'C pointer bt_node_data_t * unbound : 0x%x' % pval)
-            key = <object>((<bt_node_data_t *>(self._c_ptr)).key)
             mdict = self._py_vals[self._nth]
+            if (<bt_node_data_t *>(self._c_ptr)).key == NULL:
+                key = None
+                if mdict.has_key('m_key'):
+                    del mdict['m_key']
+            key = <object>((<bt_node_data_t *>(self._c_ptr)).key)
             if self._check_consistency:
                 if mdict.has_key('m_key') and mdict['m_key'] != key:
                     raise InconsistentValue(
@@ -125,14 +142,27 @@ cdef class Bt_node_data_ref(CObjPtr):
                 ref.bind(<void *>_c_node, 1, 0, None, [{}])
                 mdict['m_node'] = ref
                 return ref
+    property m_status:
+        def __get__(self):
+            cdef uint64_t pval
+            cdef dict mdict
+            if self._c_ptr is NULL:
+                pval = <uint64_t>(self._c_ptr)
+                raise Unbound(
+                    'C pointer bt_node_data_t * unbound : 0x%x' % pval)
+            mdict = self._py_vals[self._nth]
+            if (   not  mdict.has_key('m_status')
+                or int(mdict['m_status'])
+                            != (<bt_node_data_t *>(self._c_ptr)).status):
+                mdict['m_status'] = Bt_cell_state((<bt_node_data_t *>
+                                                    (self._c_ptr)).status)
+            return mdict['m_status']
     property m_prev:
         def __get__(self):
             cdef uint64_t pval
             cdef bt_node_data_t * _c_ref
             cdef Bt_node_data_ref ref
             cdef dict mdict
-            IF DEBUG:
-                cdef bt_node_t * _c_node
 
             if self._c_ptr is NULL:
                 pval = <uint64_t>(self._c_ptr)
@@ -170,8 +200,6 @@ cdef class Bt_node_data_ref(CObjPtr):
             cdef bt_node_data_t * _c_ref
             cdef Bt_node_data_ref ref
             cdef dict mdict
-            IF DEBUG:
-                cdef bt_node_t * _c_node
 
             if self._c_ptr is NULL:
                 pval = <uint64_t>(self._c_ptr)
@@ -249,6 +277,7 @@ cdef class Bt_node_ref(CObjPtr):
         self._mddict = {
             'm_node_type'     : bt_node_unknown,
             'm_n_indexes'     : 0,
+            'm_n_leaves'      : 0,
             'm_index_top'     : None,
             'm_parent'        : None,
         }
@@ -305,6 +334,27 @@ cdef class Bt_node_ref(CObjPtr):
                             % n_indexes, mdict['m_n_indexes'] )
             mdict['m_n_indexes'] = n_indexes
             return n_indexes
+    property m_n_leaves:
+        def __get__(self):
+            cdef uint64_t pval
+            cdef int n_leaves
+            cdef dict mdict
+            if self._c_ptr is NULL:
+                pval = <uint64_t>(self._c_ptr)
+                raise Unbound(
+                    'C pointer bt_node_data_t * unbound : 0x%x' % pval)
+            n_leaves = (<bt_node_t *>(self._c_ptr)).n_leaves
+            mdict = self._py_vals[self._nth]
+            if self._check_consistency:
+                if (    mdict.has_key('m_n_leaves')
+                    and (mdict['m_n_leaves'] != n_leaves)):
+                    raise InconsistentValue(
+                            "Inconsistent value in member 'n_leaves' of "
+                            "Bt_node_data_ref class :\n"
+                            "C value = %d, Python class value = %d"
+                            % n_leaves, mdict['m_n_leaves'] )
+            mdict['m_n_leaves'] = n_leaves
+            return n_leaves
     property m_index_top:
         def __get__(self):
             cdef uint64_t pval
@@ -331,12 +381,34 @@ cdef int _pyobj_cmp_func(BT_KEY_T k1, BT_KEY_T k2):
 
 cdef void _py_incref(object o):
     Py_INCREF(o);
-    return;
+    return
 
 cdef void _py_decref(object o):
     Py_DECREF(o);
-    return;
+    return
 
+cdef class _bt_sequence(object):
+    def __cinit__(self):
+        self._c_node_data = NULL
+        return
+
+    cdef void bind(self, bt_node_data_t *ptr):
+        self._c_node_data = ptr
+        return
+
+    def __next__(self):
+        cdef object k
+        cdef object v
+        if self._c_node_data is NULL:
+            raise StopIteration
+        if self._c_node_data[0].e.val is NULL:
+            k = None
+            v = None
+        else:
+            k = <object>(self._c_node_data[0].key)
+            v = <object>(self._c_node_data[0].e.val)
+        self._c_node_data = self._c_node_data[0].next 
+        return (k, v)
 
 cdef class Btree(object):
     def __cinit__(self):
@@ -352,12 +424,33 @@ cdef class Btree(object):
             bt_del_btree(self._c_btree)
         return
 
-    def insert(self, key, val):
+    def __iter__(self):
+        cdef _bt_sequence itr 
+        if self._c_btree is NULL:
+            raise BtTreeIsNull()
+        itr = _bt_sequence.__new__(_bt_sequence)
+        itr.bind(self._c_btree[0].top)
+        return itr
+
+    def __len__(self):
+        if self._c_btree is NULL:
+            raise BtTreeIsNull()
+        return self._c_btree[0].root[0].n_leaves
+
+    def __reduce__(self):
+        return Btree,tuple(),[x for x in self]
+
+    def __setstate__(self, state):
+        for k, v in state:
+            self.insert(k, v)
+        return
+
+    def insert(self, key, val, overwrite = 0):
         cdef bt_error_t err
 
         if self._c_btree is NULL:
             raise BtTreeIsNull()
-        err = bt_insert(self._c_btree, <BT_KEY_T>key, <BT_VAL_T>val)
+        err = bt_insert(self._c_btree, <BT_KEY_T>key, <BT_VAL_T>val, overwrite)
         if err != bt_success:
             raise BtSetException(err)()
         return
@@ -370,7 +463,7 @@ cdef class Btree(object):
             raise BtTreeIsNull()
         err = bt_search_data(self._c_btree, <BT_KEY_T>key, &val)
         if   err == bt_key_not_found:
-            return None
+            raise IndexError()
         elif err != bt_success:
             raise BtSetException(err)()
         return <object>val
@@ -385,6 +478,37 @@ cdef class Btree(object):
             raise BtSetException(err)()
         return
 
+    def remove(self, key, remove_cell=0):
+        cdef bt_error_t err
+        if self._c_btree is NULL:
+            raise BtTreeIsNull()
+        err = bt_remove_data(self._c_btree, <BT_KEY_T>key, int(remove_cell))
+        if err != bt_success:
+            raise BtSetException(err)()
+        return
+
+    def __getitem__(self, key):
+        return self.search(key)
+
+    def __setitem__(self, key, val):
+        self.insert(key, val, 1)
+        return
+
+    def __delitem__(self, key):
+        self.remove(key, 1)
+        return
+
+    def __contains__(self, key):
+        cdef bt_node_data_t * _c_ref
+        if self._c_btree is NULL:
+            raise BtTreeIsNull()
+        if self._c_btree[0].top is NULL:
+            return 0
+        _c_ref = bt_search_candidate_cell(self._c_btree, <BT_KEY_T>key)
+        if _c_ref[0].next is NULL:
+            return 0
+        return 1 if <object>((_c_ref[0].next)[0].key) == key else 0 
+
     def get_root_node(self):
         cdef Bt_node_ref ref
         if self._c_btree is NULL:
@@ -394,3 +518,15 @@ cdef class Btree(object):
         ref.bind(<void *>((self._c_btree[0]).root), 1, 0, None, [{}])
         return ref
 
+    def nth(self, n):
+        cdef const bt_node_data_t * _c_ref
+        cdef object k
+        cdef object v
+        if self._c_btree is NULL:
+            raise BtTreeIsNull()
+        _c_ref = bt_get_nth_from_smallest(self._c_btree, n)
+        if _c_ref is NULL:
+            raise IndexError()
+        k = <object>(_c_ref[0].key)
+        v = <object>(_c_ref[0].e.val)
+        return (k,v)

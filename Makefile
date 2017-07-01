@@ -1,4 +1,4 @@
-# $yfId: readindex/branches/on_the_way/btree/Makefile 56 2016-10-18 15:09:55Z futatuki $
+# $yfId: btree/trunk/Makefile 81 2017-07-01 19:35:19Z futatuki $
 DEBUG		?= 0
 CFLAGS 		= -pipe -pthread -Wall -I/usr/local/include/python2.7 
 DEBUG_CFLAGS 	= -DDEBUG=1 -fstack-protector -O0 -g
@@ -12,7 +12,7 @@ CFLAGS		+= -DGENERIC_LIB=1
 .if $(DEBUG) != 0
 CFLAGS		+= $(DEBUG_CFLAGS)
 
-all : pybtree.so check_leak
+all : Btree.so check_leak
 
 check_leak : check_leak.o btree.o
 	cc $(LDFLAGS) check_leak.o btree.o -o $@
@@ -22,7 +22,7 @@ check_leak.o : check_leak.c btree.h
 .else
 CFLAGS		+= -O2 -DNDEBUG
 
-all: pybtree.so
+all: Btree.so
 
 .endif
 
@@ -32,22 +32,25 @@ all: pybtree.so
 .pyx.c:
 	cython $(CYTHONFLAGS) $<
 
-pybtree.pxd : pybtree.pxd.in
+Btree.pxd : Btree.pxd.in
 	sed  -e s/@DEBUG@/$(DEBUG)/ $*.pxd.in > $@
 
-pybtree.pyx : pybtree.pyx.in
+Btree.pyx : Btree.pyx.in
 	sed  -e s/@DEBUG@/$(DEBUG)/ $*.pyx.in > $@
 
-pybtree.c : pybtree.pxd pybtree.pyx
+Btree.c : Btree.pxd Btree.pyx
 
-pybtree.o : btree.h pybtree.c
+Btree.o : btree.h Btree.c
 	cc $(SHARED_CFLAGS) $(CFLAGS) -c $*.c
 
 btree.o : btree.h btree.c
 	cc $(SHARED_CFLAGS) $(CFLAGS) -c $*.c
 
-pybtree.so : btree.o pybtree.o
+Btree.so : btree.o Btree.o
 	cc $(SHARED_LDFLAGS) $(LDFLAGS) $(LIBS) $> -o $@
 
 clean :
-	-rm *.o *.so pybtree.pxd pybtree.pyx pybtree.c check_leak
+	-rm *.o *.so Btree.pxd Btree.pyx Btree.c check_leak
+
+distclean: clean
+	-rm -rf build dist

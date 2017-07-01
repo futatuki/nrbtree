@@ -1,0 +1,8 @@
+include LICENSE
+include MANIFEST.in
+include Btree.pxd.in
+include Btree.pyx.in
+include btree.h
+include btree.pxd
+include btree_debug.pxd
+include bt_conf.h
