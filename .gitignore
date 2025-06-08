@@ -1,0 +1,11 @@
+.svn
+*.o
+*.so
+Btree.c
+Btree.pxd
+Btree.pyx
+MANIFEST
+build
+check_leak
+dist
+
